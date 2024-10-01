@@ -1,0 +1,12 @@
+07:12:55 [INFO] [+] Thread 1 initialized
+07:12:55 [INFO] [+] Network : mainnet started
+07:12:55 [INFO] [+] rpc : mainnet : Transaction sent : 54683K7iHBKbTybkoqS713ywypFboM44BC4ACyxR8XjjsAWbK2fBQEQcBBiHFCwLdHvvHp84BFQkv8pD4XcREcHQ
+07:12:56 [INFO] [+] rpc : mainnet : Subscribing to signature
+07:12:59 [INFO] Transaction status : Response { context: RpcResponseContext { slot: 293034921, api_version: None }, value: ProcessedSignature(ProcessedSignatureResult { err: None }) }
+07:12:59 [INFO] websocket thread - shutting down
+07:12:59 [INFO] [+] rpc : mainnet : Txn processed
+07:13:00 [INFO] [+] rpc : mainnet : Subscribing to signature
+07:13:00 [INFO] Transaction status : Response { context: RpcResponseContext { slot: 293034922, api_version: None }, value: ProcessedSignature(ProcessedSignatureResult { err: None }) }
+07:13:00 [INFO] websocket thread - shutting down
+07:13:00 [INFO] [+] rpc : mainnet : Txn confirmed
+07:13:00 [INFO] Time taken for txn to be processed : 1727766779 1727766775 4.065688709s 4.809513334s
