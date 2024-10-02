@@ -401,38 +401,64 @@ async fn main() {
         .open("ping_rpc.csv")
         .unwrap();
     let csv_ping = Arc::new(Mutex::new(Writer::from_writer(csv_ping)));
+
+
     /*
     Todo :
     1. make a tokio task
     2. make a benchmark trait that it to orch the benchmark  abit late
      */
+    let astralane = RpcUrl {
+        rpc_name: "Astralane RPC".to_string(),
+        rpc_http: "http://rpc:8899".to_string(),
+        rpc_ws: "ws://:8900".to_string(),
+        txn_data_vec: vec![],
+    };
+    let quic = RpcUrl {
+        rpc_name: "quic RPC".to_string(),
+        rpc_http: "https://young-withered-needle.solana-mainnet.quiknode.pro/ebca017c4a950e92de81dbe69a41ec2e6e4583b6".to_string(),
+        rpc_ws: "ws://rpc:8891".to_string(),
+        txn_data_vec: vec![],
+    };
+    let lite = RpcUrl {
+        rpc_name: "lite RPC".to_string(),
+        rpc_http: "http://rpc:8890".to_string(),
+        rpc_ws: "ws://rpc:8891".to_string(),
+        txn_data_vec: vec![],
+    };
+    let triton = RpcUrl {
+        rpc_name: "triton RPC".to_string(),
+        rpc_http: "https://astralan-solanac-be6d.mainnet.rpcpool.com/71e5497d-a074-481d-9da9-d03278df8ea4".to_string(),
+        rpc_ws: "ws://rpc:8891".to_string(),
+        txn_data_vec: vec![],
+    };
 
     let rpc_vec = vec![
-        RpcUrl {
-            rpc_name: "Astralane RPC".to_string(),
-            rpc_http: "http://rpc:8899".to_string(),
-            rpc_ws: "ws://:8900".to_string(),
-            txn_data_vec: vec![],
-        },
-        RpcUrl {
-            rpc_name: "lite RPC".to_string(),
-            rpc_http: "http://rpc:8890".to_string(),
-            rpc_ws: "ws://rpc:8891".to_string(),
-            txn_data_vec: vec![],
-        },
-        RpcUrl {
-            rpc_name: "quic RPC".to_string(),
-            rpc_http: "https://young-withered-needle.solana-mainnet.quiknode.pro/ebca017c4a950e92de81dbe69a41ec2e6e4583b6".to_string(),
-            rpc_ws: "ws://rpc:8891".to_string(),
-            txn_data_vec: vec![],
-        },
-        RpcUrl {
-            rpc_name: "triton RPC".to_string(),
-            rpc_http: "https://astralan-solanac-be6d.mainnet.rpcpool.com/71e5497d-a074-481d-9da9-d03278df8ea4".to_string(),
-            rpc_ws: "ws://rpc:8891".to_string(),
-            txn_data_vec: vec![],
-        }
+        astralane.clone(),
+        lite.clone(),
+        quic.clone(),
+        triton.clone(),
     ];
+
+    task::spawn(async move {
+        loop {
+            let (astralane, lite, quic, triton) = (ping_url(&*astralane.clone().rpc_http).await.as_millis(),
+                                                   ping_url(&*lite.clone().rpc_http).await.as_millis(),
+                                                   ping_url(&*quic.clone().rpc_http).await.as_millis(),
+                                                   ping_url(&*triton.clone().rpc_http).await.as_millis());
+            let ping_data = Pingdata {
+                astralane,
+                lite,
+                quic,
+                triton
+            };
+            let mut writer = csv_ping.lock().unwrap();
+            writer.serialize(&ping_data).expect("Failed to write to CSV");
+            writer.flush().expect("Failed to flush CSV writer");
+
+            tokio::time::sleep(Duration::from_millis(10000)).await;
+        }
+    });
 
 
     let number_of_txn = 10;
@@ -470,19 +496,6 @@ async fn main() {
         }
     });
 
-    let (astralane, lite, quic, triton) = (ping_url("http://rpc:8899").await.as_millis(),
-                                           ping_url("http://rpc:8890").await.as_millis(),
-                                           ping_url("https://young-withered-needle.solana-mainnet.quiknode.pro").await.as_millis(),
-                                           ping_url("https://astralan-solanac-be6d.mainnet.rpcpool.com").await.as_millis());
-    let ping_data = Pingdata {
-        astralane,
-        lite,
-        quic,
-        triton
-    };
-    let mut writer = csv_ping.lock().unwrap();
-    writer.serialize(&ping_data).expect("Failed to write to CSV");
-    writer.flush().expect("Failed to flush CSV writer");
     // sleep for setting the slots
     tokio::time::sleep(Duration::from_secs(5)).await;
     let mut cnt =0;
