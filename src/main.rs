@@ -307,7 +307,7 @@ impl SingleTxnProcess {
                     get_slot: 6969,
                     landed_slot : 6969,
                     slot_delta: 6969,
-                    time_at_txn_sent,
+                    time_at_txn_sent: 6969,
                     // time_at_txn_processed,
                     // time_at_txn_confirmed,
                     time_taken_processed: 6969,
