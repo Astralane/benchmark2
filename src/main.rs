@@ -50,6 +50,7 @@ struct TxnData {
     // time_at_txn_processed : i64,
     // time_at_txn_confirmed : i64,
     time_taken_processed: u128,
+    ping_time: u128
     // time_taken_confirmed : u128,
 }
 
@@ -186,8 +187,8 @@ impl SingleTxnProcess {
         let rpc = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment("http://rpc:8899".to_string(), CommitmentConfig::processed());
         let start = Instant::now();
         loop {
-            info!("[.] in the loop of get txn status");
-            if start.elapsed().as_secs() > 60 {
+            // info!("[.] in the loop of get txn status");
+            if start.elapsed().as_secs() > 10 {
                 error!("[-] rpc : {} : Error in get_txn_status : {:?}", self.name, "Timeout");
                 return Err("Timeout".to_string());
             }
@@ -230,6 +231,15 @@ impl SingleTxnProcess {
         }
     }
 
+    async fn ping_url(url: &str) -> Duration {
+        let client = reqwest::Client::new();
+        let start = Instant::now();
+        let response = client.get(url).send().await.unwrap();
+        let duration = start.elapsed();
+        // println!("Status: {}", response.status());
+        duration
+    }
+
     fn get_txn_slot(rpc_signature_result: Response<RpcSignatureResult>) -> u64 {
         let slot = rpc_signature_result.context.slot;
         slot
@@ -237,6 +247,8 @@ impl SingleTxnProcess {
 
     async fn start(&self) -> TxnData {
         info!("[+] Network : {} started", self.name);
+        let ping_time = SingleTxnProcess::ping_url(&self.rpc_http).await;
+        let mut status = true;
         match self.test_transaction() {
             Ok((signature, time, slot)) => {
                 info!("[+] rpc : {} : Transaction sent : {:?}", self.name, signature);
@@ -249,6 +261,9 @@ impl SingleTxnProcess {
                 // let (send_confirmed, recv_confirmed) = std::sync::mpsc::channel();
                 let landed_slot = self.get_txn_status(signature.clone()).await.unwrap_or(6969);
                 let duration1 = time_start.elapsed();
+                if landed_slot == 6969 {
+                    status = false;
+                }
                 // let pubsub_processed_handle = task::spawn(async move {
                 //     SingleTxnProcess::transaction_status(rpc_ws.clone(), name.clone(), signature, CommitmentConfig::processed(), send_processed);
                 // });
@@ -269,7 +284,7 @@ impl SingleTxnProcess {
                 let txn_data = TxnData {
                     id: self.id,
                     txn_id: signature.to_string(),
-                    status: true,
+                    status: status,
                     get_slot: slot,
                     landed_slot,
                     slot_delta: landed_slot - slot,
@@ -277,6 +292,7 @@ impl SingleTxnProcess {
                     // time_at_txn_processed,
                     // time_at_txn_confirmed,
                     time_taken_processed: duration1.as_millis(),
+                    ping_time: ping_time.as_millis()
                     // time_taken_confirmed : duration2.as_millis(),
                 };
                 info!("[+] rpc : {} : Txn data : {:#?}",self.name, txn_data);
@@ -284,7 +300,21 @@ impl SingleTxnProcess {
             }
             Err(e) => {
                 error!("Error in start : {:?}", e);
-                panic!("Error in start")
+                let txn_data = TxnData {
+                    id: self.id,
+                    txn_id: "Failed".to_string(),
+                    status: status,
+                    get_slot: 6969,
+                    landed_slot : 6969,
+                    slot_delta: 6969,
+                    time_at_txn_sent,
+                    // time_at_txn_processed,
+                    // time_at_txn_confirmed,
+                    time_taken_processed: 6969,
+                    ping_time: ping_time.as_millis()
+                    // time_taken_confirmed : duration2.as_millis(),
+                };
+                txn_data
             }
         }
     }
@@ -313,28 +343,28 @@ async fn main() {
         .write(true)
         .append(true)
         .create(true)
-        .open("txn_data_astralane_rpct.csv")
+        .open("txn_data_astralane_rpc.csv")
         .unwrap();
     let csv_writer_astra = Arc::new(Mutex::new(Writer::from_writer(csv_file_astra)));
     let csv_file_main = OpenOptions::new()
         .write(true)
         .append(true)
         .create(true)
-        .open("txn_data_lite_rpct.csv")
+        .open("txn_data_lite_rpc.csv")
         .unwrap();
     let csv_writer_quic = Arc::new(Mutex::new(Writer::from_writer(csv_file_main)));
     let csv_file_quic = OpenOptions::new()
         .write(true)
         .append(true)
         .create(true)
-        .open("txn_data_quic_rpct.csv")
+        .open("txn_data_quic_rpc.csv")
         .unwrap();
     let csv_writer_main = Arc::new(Mutex::new(Writer::from_writer(csv_file_quic)));
     let csv_file_tri = OpenOptions::new()
         .write(true)
         .append(true)
         .create(true)
-        .open("txn_data_triton_rpct.csv")
+        .open("txn_data_triton_rpc.csv")
         .unwrap();
     let csv_writer_tri = Arc::new(Mutex::new(Writer::from_writer(csv_file_tri)));
 
@@ -347,13 +377,13 @@ async fn main() {
     let rpc_vec = vec![
         RpcUrl {
             rpc_name: "Astralane RPC".to_string(),
-            rpc_http: "http://rpc:8899".to_string(),
+            rpc_http: "http://localhost:8899".to_string(),
             rpc_ws: "ws://rpc:8900".to_string(),
             txn_data_vec: vec![],
         },
         RpcUrl {
             rpc_name: "lite RPC".to_string(),
-            rpc_http: "http://rpc:8890".to_string(),
+            rpc_http: "http://localhost:8890".to_string(),
             rpc_ws: "ws://rpc:8891".to_string(),
             txn_data_vec: vec![],
         },
@@ -373,7 +403,7 @@ async fn main() {
 
 
     let number_of_txn = 10;
-    let number_of_times = 5;
+    let number_of_times = 500;
 
     let mut handle_vec = vec![];
 
@@ -432,7 +462,7 @@ async fn main() {
                         block_hash_clone,
                         slot_arc_clone,
                         true,
-                        100000,
+                        500000,
                         1000,
                     );
                     // single_txn_process.start().await;
