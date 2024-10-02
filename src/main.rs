@@ -528,8 +528,8 @@ async fn main() {
     };
 
     let rpc_vec = vec![
-        // astralane.clone(),
-        // lite.clone(),
+        astralane.clone(),
+        lite.clone(),
         quic.clone(),
         triton.clone(),
         helius.clone(),
@@ -538,8 +538,8 @@ async fn main() {
     task::spawn(async move {
         loop {
             let (astralane, lite, quic, triton, helius) = (
-                0,
-                0,
+                ping_url(&*astralane.clone().rpc_http).await.as_millis(),
+                ping_url(&*astralane.clone().rpc_http).await.as_millis(),
                 ping_url(&*quic.clone().rpc_http).await.as_millis(),
                 ping_url(&*triton.clone().rpc_http).await.as_millis(),
                 ping_url(&*helius.clone().rpc_http).await.as_millis(),
