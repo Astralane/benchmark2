@@ -394,13 +394,13 @@ async fn main() {
         .unwrap();
     let csv_writer_tri = Arc::new(Mutex::new(Writer::from_writer(csv_file_tri)));
 
-    let mut csv_ping = OpenOptions::new()
+    let csv_file_ping = OpenOptions::new()
         .write(true)
         .append(true)
         .create(true)
         .open("ping_rpc.csv")
         .unwrap();
-    let csv_ping = Arc::new(Mutex::new(Writer::from_writer(csv_ping)));
+    let csv_writer_ping = Arc::new(Mutex::new(Writer::from_writer(csv_file_ping)));
 
 
     /*
@@ -439,9 +439,10 @@ async fn main() {
         quic.clone(),
         triton.clone(),
     ];
-
+    let csv_ping_clone = Arc::clone(&csv_writer_ping);
     task::spawn(async move {
         loop {
+
             let (astralane, lite, quic, triton) = (ping_url(&*astralane.clone().rpc_http).await.as_millis(),
                                                    ping_url(&*lite.clone().rpc_http).await.as_millis(),
                                                    ping_url(&*quic.clone().rpc_http).await.as_millis(),
@@ -452,11 +453,12 @@ async fn main() {
                 quic,
                 triton
             };
-            let mut writer = csv_ping.lock().unwrap();
+            tokio::time::sleep(Duration::from_millis(10000)).await;
+
+            let mut writer = csv_ping_clone.lock().unwrap();
             writer.serialize(&ping_data).expect("Failed to write to CSV");
             writer.flush().expect("Failed to flush CSV writer");
 
-            tokio::time::sleep(Duration::from_millis(10000)).await;
         }
     });
 
