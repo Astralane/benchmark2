@@ -1,32 +1,35 @@
+use chrono::Utc;
+use csv::Writer;
+use futures::StreamExt;
+use log::{error, info};
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use simplelog::*;
+use solana_client::pubsub_client::PubsubClient;
+use solana_client::rpc_client::RpcClient;
+use solana_client::rpc_config::{RpcSendTransactionConfig, RpcSignatureSubscribeConfig};
+use solana_client::rpc_response::{Response, RpcSignatureResult};
+use solana_rpc_client_api::response::SlotUpdate;
+use solana_sdk::commitment_config::CommitmentConfig;
+use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_sdk::hash::Hash;
+use solana_sdk::instruction::Instruction;
+use solana_sdk::message::Message;
+use solana_sdk::signature::{EncodableKey, Keypair, Signature, Signer};
+use solana_sdk::system_instruction;
+use solana_sdk::transaction::Transaction;
+use solana_transaction_status::{TransactionConfirmationStatus, UiTransactionEncoding};
 use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::{Arc, Mutex, RwLock};
+use std::pin::pin;
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use solana_client::rpc_client::RpcClient;
 use tokio;
-use simplelog::*;
-use log::{info, error};
-use solana_sdk::commitment_config::CommitmentConfig;
-use solana_sdk::hash::Hash;
-use solana_sdk::message::Message;
-use solana_sdk::signature::{EncodableKey, Keypair, Signature, Signer};
-use solana_sdk::{system_instruction};
-use solana_sdk::transaction::Transaction;
-use serde::{Deserialize, Serialize};
-use solana_transaction_status::{TransactionConfirmationStatus, UiTransactionEncoding};
-use solana_client::rpc_config::{RpcSignatureSubscribeConfig};
-use solana_client::pubsub_client::{PubsubClient};
-use csv::Writer;
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
-use chrono::Utc;
-use solana_client::rpc_response::{Response, RpcSignatureResult};
-use solana_sdk::instruction::Instruction;
 use tokio::task;
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
-use serde_json::json;
 use tokio::time::sleep;
 /*
 todo :
@@ -39,8 +42,7 @@ todo :
 8. time difference
 9.
  */
-#[derive(Clone)]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct TxnData {
     id: u32,
     txn_id: String,
@@ -58,10 +60,11 @@ struct TxnData {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Pingdata {
-    astralane : u128,
-    lite : u128,
-    quic : u128,
-    triton : u128
+    astralane: u128,
+    lite: u128,
+    quic: u128,
+    triton: u128,
+    helius: u128,
 }
 
 #[derive(Clone)]
@@ -87,18 +90,20 @@ struct SingleTxnProcess {
 }
 
 impl SingleTxnProcess {
-    fn new(id: u32,
-           name: String,
-           rpc_http: String,
-           rpc_ws: String,
-           keypair: Keypair,
-           recent_blockhashes: Arc<RwLock<Option<Hash>>>,
-           current_slot: Arc<RwLock<Option<u64>>>,
-           priority_fee_bool: bool,
-           compute_unit_price: u64,
-           compute_unit_limit: u32,
+    fn new(
+        id: u32,
+        name: String,
+        rpc_http: String,
+        rpc_ws: String,
+        keypair: Keypair,
+        recent_blockhashes: Arc<RwLock<Option<Hash>>>,
+        current_slot: Arc<RwLock<Option<u64>>>,
+        priority_fee_bool: bool,
+        compute_unit_price: u64,
+        compute_unit_limit: u32,
     ) -> SingleTxnProcess {
-        let client = RpcClient::new_with_commitment(rpc_http.clone(), CommitmentConfig::processed());
+        let client =
+            RpcClient::new_with_commitment(rpc_http.clone(), CommitmentConfig::processed());
         SingleTxnProcess {
             id,
             name,
@@ -121,54 +126,94 @@ impl SingleTxnProcess {
             .collect()
     }
 
-    fn test_transaction(&self) -> Result<(Signature, i64, u64), solana_client::client_error::ClientError> {
+    fn test_transaction(
+        &self,
+    ) -> Result<(Signature, i64, u64), solana_client::client_error::ClientError> {
         // Get recent blockhash
         let message: Message;
 
-        let pay = (5000 + self.id) as u64 + ( rand::thread_rng().gen_range(1, 10000/* high */));
+        let pay =
+            (5000 + self.id) as u64 + (rand::thread_rng().gen_range(1, 10000 /* high */));
 
         let memo = SingleTxnProcess::generate_random_string(5);
         let recent_blockhash = self.recent_blockhashes.read().unwrap();
         let memo_instruction = Instruction {
-            program_id: "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr".parse().unwrap(),
+            program_id: "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+                .parse()
+                .unwrap(),
             accounts: vec![],
             data: memo.as_bytes().to_vec(),
         };
 
-        let transfer_instruction = system_instruction::transfer(&self.keypair.pubkey(), &self.keypair.pubkey(), pay );
-        let compute_unit_limit = ComputeBudgetInstruction::set_compute_unit_limit(self.compute_unit_limit);
-        let compute_unit_price = ComputeBudgetInstruction::set_compute_unit_price(self.compute_unit_price);
+        let transfer_instruction =
+            system_instruction::transfer(&self.keypair.pubkey(), &self.keypair.pubkey(), pay);
+        let compute_unit_limit =
+            ComputeBudgetInstruction::set_compute_unit_limit(self.compute_unit_limit);
+        let compute_unit_price =
+            ComputeBudgetInstruction::set_compute_unit_price(self.compute_unit_price);
 
         if self.priority_fee_bool {
-            message = Message::new(&[compute_unit_limit, compute_unit_price, transfer_instruction], Some(&self.keypair.pubkey()));
+            message = Message::new(
+                &[compute_unit_limit, compute_unit_price, transfer_instruction],
+                Some(&self.keypair.pubkey()),
+            );
         } else {
             message = Message::new(&[transfer_instruction], Some(&self.keypair.pubkey()));
         }
         // Create transaction
-        let transaction = Transaction::new(&[&self.keypair], message, recent_blockhash.unwrap_or_default());
+        let transaction = Transaction::new(
+            &[&self.keypair],
+            message,
+            recent_blockhash.unwrap_or_default(),
+        );
 
-        match self.client.send_transaction(&transaction) {
+        match self.client.send_transaction_with_config(
+            &transaction,
+            RpcSendTransactionConfig {
+                skip_preflight: true,
+                preflight_commitment: None,
+                encoding: None,
+                max_retries: None,
+                min_context_slot: None,
+            },
+        ) {
             Ok(signature) => {
-                let slot = self.current_slot.read().unwrap();
+                let slot = { self.current_slot.read().unwrap() };
                 let time = Utc::now().timestamp();
-                info!("[+] rpc : {} : Transaction sent : {:?} : pay {} ",self.name.clone(), signature, pay);
+                info!(
+                    "[+] rpc : {} : Transaction sent : {:?} : pay {} ",
+                    self.name.clone(),
+                    signature,
+                    pay
+                );
                 Ok((signature, time, slot.unwrap_or_default()))
             }
             Err(e) => {
-                error!("[-] rpc : {} : Error in test_transaction : {:?}",self.name.clone(), e);
-                error!("[-] Blockhash : {}",recent_blockhash.unwrap().to_string());
+                error!(
+                    "[-] rpc : {} : Error in test_transaction : {:?}",
+                    self.name.clone(),
+                    e
+                );
+                error!("[-] Blockhash : {}", recent_blockhash.unwrap().to_string());
                 Err(e)
             }
         }
     }
 
-    fn transaction_status(rpc_ws: String, name: String, signature: Signature, commitment_config: CommitmentConfig, send: Sender<(Response<RpcSignatureResult>, i64)>) {
-        let subcribe_rpc = PubsubClient::signature_subscribe(&rpc_ws,
-                                                             &signature,
-                                                             Some(RpcSignatureSubscribeConfig {
-                                                                 commitment: Some(commitment_config),
-                                                                 enable_received_notification: Some(false),
-                                                             }),
+    fn transaction_status(
+        rpc_ws: String,
+        name: String,
+        signature: Signature,
+        commitment_config: CommitmentConfig,
+        send: Sender<(Response<RpcSignatureResult>, i64)>,
+    ) {
+        let subcribe_rpc = PubsubClient::signature_subscribe(
+            &rpc_ws,
+            &signature,
+            Some(RpcSignatureSubscribeConfig {
+                commitment: Some(commitment_config),
+                enable_received_notification: Some(false),
+            }),
         );
 
         info!("[+] rpc : {} : Subscribing to signature", name.clone());
@@ -180,11 +225,16 @@ impl SingleTxnProcess {
                     Ok(response) => {
                         let time = Utc::now().timestamp();
                         info!("Transaction status : {:?}", response);
-                        send.send((response.clone(), time)).expect("Error in sending response");
+                        send.send((response.clone(), time))
+                            .expect("Error in sending response");
                         info!("subscription done.. turn off here");
                     }
                     Err(e) => {
-                        error!("[-] rpc : {} : Error in transaction_status : {:?}", name.clone(), e);
+                        error!(
+                            "[-] rpc : {} : Error in transaction_status : {:?}",
+                            name.clone(),
+                            e
+                        );
                         panic!("Error in transaction_status")
                     }
                 }
@@ -198,12 +248,20 @@ impl SingleTxnProcess {
     }
 
     async fn get_txn_status(&self, signature: Signature) -> Result<u64, String> {
-        let rpc = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment("http://rpc:8899".to_string(), CommitmentConfig::processed());
+        let rpc = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment(
+            "https://staked.helius-rpc.com?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11"
+                .to_string(),
+            CommitmentConfig::processed(),
+        );
         let start = Instant::now();
         loop {
+            sleep(Duration::from_millis(5000)).await;
             // info!("[.] in the loop of get txn status");
             if start.elapsed().as_secs() > 60 {
-                error!("[-] rpc : {} : Error in get_txn_status : {:?}", self.name, "Timeout");
+                error!(
+                    "[-] rpc : {} : Error in get_txn_status : {:?}",
+                    self.name, "Timeout"
+                );
                 return Err("Timeout".to_string());
             }
             let rpc_signature_result = rpc.get_signature_statuses(&[signature]).await;
@@ -218,7 +276,7 @@ impl SingleTxnProcess {
                                             // info!("[+] got rpc : {} : Transaction processed", self.name);
                                             return Ok(data.slot);
                                         }
-                                        None => continue
+                                        None => continue,
                                     }
                                 }
                                 None => {
@@ -227,18 +285,23 @@ impl SingleTxnProcess {
                             }
                         }
                         None => {
-                            error!("[-] rpc : {} : Error in get_txn_status : {:?}", self.name, "No data in rpc_signature_result");
+                            error!(
+                                "[-] rpc : {} : Error in get_txn_status : {:?}",
+                                self.name, "No data in rpc_signature_result"
+                            );
                             // panic!("Error in get_txn_status")
                         }
                     }
                     // info!("[+] --- rpc : {} : Transaction status : {:?}", self.name, rpc_signature_result);
                 }
                 Err(e) => {
-                    error!("[-] rpc : {} : Error in get_txn_status : {:?}", self.name, e);
+                    error!(
+                        "[-] rpc : {} : Error in get_txn_status : {:?}",
+                        self.name, e
+                    );
                     // panic!("Error in get_txn_status")
                 }
             }
-            sleep(Duration::from_millis(500)).await;
         }
     }
 
@@ -246,8 +309,6 @@ impl SingleTxnProcess {
         let slot = rpc_signature_result.context.slot;
         slot
     }
-
-
 
     async fn send_transaction(&self) -> TxnData {
         // info!("[+] Network : {} started", self.name);
@@ -309,7 +370,7 @@ impl SingleTxnProcess {
                     txn_id: "Failed".to_string(),
                     status: false,
                     get_slot: 6969,
-                    landed_slot : 6969,
+                    landed_slot: 6969,
                     slot_delta: 6969,
                     time_at_txn_sent: 6969,
                     // time_at_txn_processed,
@@ -322,48 +383,66 @@ impl SingleTxnProcess {
             }
         }
     }
-
 }
 
-    async fn ping_url(url: &str) -> Duration {
-        let client = reqwest::Client::new();
-        let start = Instant::now();
-        let response = client.get(url).send().await.unwrap();
-        let duration = start.elapsed();
-        // println!("Status: {}", response.status());
-        duration
-    }
+async fn ping_url(url: &str) -> Duration {
+    let client = reqwest::Client::new();
+    let start = Instant::now();
+    let response = client.get(url).send().await.unwrap();
+    let duration = start.elapsed();
+    // println!("Status: {}", response.status());
+    duration
+}
 
 async fn get_recent_priority_fee_estimate(url: &str) -> f64 {
-    let resp  = reqwest::Client::new().post(url).body(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getPriorityFeeEstimate",
-        "params": [
-            {
-                "accountKeys":["11111111111111111111111111111111"],
-                "options": {
-                "priorityLevel": "High"
-            }
-            }
-        ]
-    }).to_string()).send().await.unwrap().json::<serde_json::Value>().await.unwrap();
+    let resp = reqwest::Client::new()
+        .post(url)
+        .body(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getPriorityFeeEstimate",
+                "params": [
+                    {
+                        "accountKeys":["11111111111111111111111111111111"],
+                        "options": {
+                        "priorityLevel": "High"
+                    }
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
     info!("[+] Priority fee : {:#?}", resp);
-    let fee = resp["result"]["priorityFeeEstimate"].as_f64().unwrap_or(500000.0);
+    let fee = resp["result"]["priorityFeeEstimate"]
+        .as_f64()
+        .unwrap_or(500000.0);
     fee
 }
+
+
 #[tokio::main]
 async fn main() {
-    CombinedLogger::init(
-        vec![
-            TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, Default::default()),
-            WriteLogger::new(
-                LevelFilter::Info,
-                Config::default(),
-                File::create("app.log").unwrap(),
-            ),
-        ]
-    ).unwrap();
+    CombinedLogger::init(vec![
+        TermLogger::new(
+            LevelFilter::Info,
+            Config::default(),
+            TerminalMode::Mixed,
+            Default::default(),
+        ),
+        WriteLogger::new(
+            LevelFilter::Info,
+            Config::default(),
+            File::create("app.log").unwrap(),
+        ),
+    ])
+    .unwrap();
 
     let csv_file_astra = OpenOptions::new()
         .write(true)
@@ -378,14 +457,14 @@ async fn main() {
         .create(true)
         .open("txn_data_lite_rpc.csv")
         .unwrap();
-    let csv_writer_quic = Arc::new(Mutex::new(Writer::from_writer(csv_file_main)));
+    let csv_writer_main = Arc::new(Mutex::new(Writer::from_writer(csv_file_main)));
     let csv_file_quic = OpenOptions::new()
         .write(true)
         .append(true)
         .create(true)
         .open("txn_data_quic_rpc.csv")
         .unwrap();
-    let csv_writer_main = Arc::new(Mutex::new(Writer::from_writer(csv_file_quic)));
+    let csv_writer_quic = Arc::new(Mutex::new(Writer::from_writer(csv_file_quic)));
     let csv_file_tri = OpenOptions::new()
         .write(true)
         .append(true)
@@ -393,6 +472,13 @@ async fn main() {
         .open("txn_data_triton_rpc.csv")
         .unwrap();
     let csv_writer_tri = Arc::new(Mutex::new(Writer::from_writer(csv_file_tri)));
+    let csv_file_helius = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open("txn_data_helius_rpc.csv")
+        .unwrap();
+    let csv_writer_helius = Arc::new(Mutex::new(Writer::from_writer(csv_file_helius)));
 
     let csv_file_ping = OpenOptions::new()
         .write(true)
@@ -401,7 +487,6 @@ async fn main() {
         .open("ping_rpc.csv")
         .unwrap();
     let csv_writer_ping = Arc::new(Mutex::new(Writer::from_writer(csv_file_ping)));
-
 
     /*
     Todo :
@@ -428,43 +513,56 @@ async fn main() {
     };
     let triton = RpcUrl {
         rpc_name: "triton RPC".to_string(),
-        rpc_http: "https://astralan-solanac-be6d.mainnet.rpcpool.com/71e5497d-a074-481d-9da9-d03278df8ea4".to_string(),
+        rpc_http:
+            "https://astralan-solanac-be6d.mainnet.rpcpool.com/71e5497d-a074-481d-9da9-d03278df8ea4"
+                .to_string(),
+        rpc_ws: "ws://rpc:8891".to_string(),
+        txn_data_vec: vec![],
+    };
+    let helius = RpcUrl {
+        rpc_name: "helius RPC".to_string(),
+        rpc_http: "https://staked.helius-rpc.com?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11"
+            .to_string(),
         rpc_ws: "ws://rpc:8891".to_string(),
         txn_data_vec: vec![],
     };
 
     let rpc_vec = vec![
-        astralane.clone(),
-        lite.clone(),
+        // astralane.clone(),
+        // lite.clone(),
         quic.clone(),
         triton.clone(),
+        helius.clone(),
     ];
     let csv_ping_clone = Arc::clone(&csv_writer_ping);
     task::spawn(async move {
         loop {
-
-            let (astralane, lite, quic, triton) = (ping_url(&*astralane.clone().rpc_http).await.as_millis(),
-                                                   ping_url(&*lite.clone().rpc_http).await.as_millis(),
-                                                   ping_url(&*quic.clone().rpc_http).await.as_millis(),
-                                                   ping_url(&*triton.clone().rpc_http).await.as_millis());
+            let (astralane, lite, quic, triton, helius) = (
+                0,
+                0,
+                ping_url(&*quic.clone().rpc_http).await.as_millis(),
+                ping_url(&*triton.clone().rpc_http).await.as_millis(),
+                ping_url(&*helius.clone().rpc_http).await.as_millis(),
+            );
             let ping_data = Pingdata {
                 astralane,
                 lite,
                 quic,
-                triton
+                triton,
+                helius,
             };
             tokio::time::sleep(Duration::from_millis(10000)).await;
 
             let mut writer = csv_ping_clone.lock().unwrap();
-            writer.serialize(&ping_data).expect("Failed to write to CSV");
+            writer
+                .serialize(&ping_data)
+                .expect("Failed to write to CSV");
             writer.flush().expect("Failed to flush CSV writer");
-
         }
     });
 
-
     let number_of_txn = 10;
-    let number_of_times = 200;
+    let number_of_times = 50;
 
     let mut handle_vec = vec![];
 
@@ -473,36 +571,70 @@ async fn main() {
 
     let blockhash_arc_clone = blockhash_arc.clone();
     task::spawn(async move {
-        let rpc = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment("http://rpc:8899".to_string(), CommitmentConfig::confirmed());
+        let rpc = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment(
+            "https://staked.helius-rpc.com?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11"
+                .to_string(),
+            CommitmentConfig::confirmed(),
+        );
         loop {
-            let blockhash = rpc.get_latest_blockhash_with_commitment(CommitmentConfig::finalized()).await.unwrap();
+            let blockhash = rpc
+                .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+                .await
+                .unwrap();
             {
                 let mut lock = blockhash_arc_clone.write().unwrap();
                 *lock = Some(blockhash.0);
             }
-            info!("[+] blockhash is updated to : {} " , blockhash_arc_clone.read().unwrap().clone().unwrap());
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            info!(
+                "[+] blockhash is updated to : {} ",
+                blockhash_arc_clone.read().unwrap().clone().unwrap()
+            );
+            tokio::time::sleep(Duration::from_secs(10)).await;
         }
     });
 
     let slot_arc_clone = slot_arc.clone();
     task::spawn(async move {
-        let rpc = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment("http://rpc:8899".to_string(), CommitmentConfig::confirmed());
-        loop {
-            let slot = rpc.get_slot().await.unwrap();
-            {
-                let mut lock = slot_arc_clone.write().unwrap();
-                *lock = Some(slot);
+        let ws_rpc = solana_client::nonblocking::pubsub_client::PubsubClient::new(
+            "wss://mainnet.helius-rpc.com/?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11",
+        )
+        .await;
+        match ws_rpc {
+            Ok(pub_client) => {
+                // info!("[+] slot subscription done");
+                let subscription = pub_client.slot_updates_subscribe().await;
+                match subscription {
+                    Ok((mut stream, unsub)) => {
+                        while let Some(slot) = stream.next().await {
+                            if let SlotUpdate::FirstShredReceived { slot, .. } = slot {
+                                info!("[+] slot : {}", slot);
+                                let mut lock = slot_arc_clone.write().unwrap();
+                                *lock = Some(slot);
+                            }
+                        }
+                        unsub().await;
+                    }
+                    Err(e) => {
+                        error!("[-] Error in slot subscription : {:?}", e);
+                        panic!("Error in slot subscription")
+                    }
+                }
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            Err(e) => {
+                error!("[-] Error in slot subscription : {:?}", e);
+                panic!("Error in slot subscription")
+            }
         }
     });
 
     // sleep for setting the slots
     tokio::time::sleep(Duration::from_secs(5)).await;
-    let mut cnt =0;
+    let mut cnt = 0;
     for j in 0..number_of_times {
-        let priorty_fee = get_recent_priority_fee_estimate("https://mainnet.helius-rpc.com/?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11").await;
+        let priorty_fee = get_recent_priority_fee_estimate(
+            "https://mainnet.helius-rpc.com/?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11",
+        )
+        .await;
         info!("[+] priorty_fee : {}", priorty_fee);
         for i in 0..number_of_txn {
             for rpc in rpc_vec.clone() {
@@ -510,7 +642,7 @@ async fn main() {
                 let csv_file_main_clone = Arc::clone(&csv_writer_main);
                 let csv_file_quic_clone = Arc::clone(&csv_writer_quic);
                 let csv_file_tri_clone = Arc::clone(&csv_writer_tri);
-
+                let csv_file_helius_clone = Arc::clone(&csv_writer_helius);
 
                 let slot_arc_clone = slot_arc.clone();
                 let block_hash_clone = blockhash_arc.clone();
@@ -518,7 +650,7 @@ async fn main() {
                 let handle = task::spawn(async move {
                     // info!("[+] rpc : {}, id : {}  initialized",rpc.rpc_name.clone(), i);
                     let rpc_handle = SingleTxnProcess::new(
-                        (j*10) + i,
+                        (j * 10) + i,
                         rpc.rpc_name.clone(),
                         rpc.rpc_http.clone(),
                         rpc.rpc_ws.clone(),
@@ -552,6 +684,11 @@ async fn main() {
                             writer.serialize(&data).expect("Failed to write to CSV");
                             writer.flush().expect("Failed to flush CSV writer");
                         }
+                        "helius RPC" => {
+                            let mut writer = csv_file_helius_clone.lock().unwrap();
+                            writer.serialize(&data).expect("Failed to write to CSV");
+                            writer.flush().expect("Failed to flush CSV writer");
+                        }
                         _ => {
                             error!("[-] rpc : {} : Error in rpc name", rpc.rpc_name.clone());
                             panic!("Error in rpc name")
@@ -563,7 +700,7 @@ async fn main() {
         }
         cnt = cnt + number_of_txn;
         log::info!("tx count : {}", cnt);
-        tokio::time::sleep(Duration::from_millis(2000)).await;
+        tokio::time::sleep(Duration::from_millis(10000)).await;
     }
 
     for handle in handle_vec {
