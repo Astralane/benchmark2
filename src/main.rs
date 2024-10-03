@@ -1,3 +1,6 @@
+mod utils;
+
+use std::env;
 use chrono::Utc;
 use csv::Writer;
 use futures::StreamExt;
@@ -28,19 +31,13 @@ use std::pin::pin;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use dotenv::dotenv;
 use tokio;
 use tokio::task;
 use tokio::time::sleep;
 /*
 todo :
-1. multiple rpc for testing multiple network
-2. same txn for multiple network
-3. record time
-4. record slot
-5. record txn hash
-7. get processed shred from top ledger to get time
-8. time difference
-9.
+1. subscribing to txn
  */
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct TxnData {
@@ -89,6 +86,28 @@ struct SingleTxnProcess {
     compute_unit_limit: u32,
 }
 
+struct TestRPCHandle {
+    name : String,
+    url : String,
+    out_csv_file_name : String,
+    out_csv_file_writer_handle : Arc<Mutex<Writer<File>>>,
+}
+
+struct GlobalVariable {
+    rpc_vec : Vec<String>,
+    out_csv_file_name_vec : Vec<String>,
+    no_of_burst_txn : u32,
+    no_of_times : u32,
+    ws_for_subscription : String,
+    rpc_for_read : String,
+    private_key_file : String,
+    priority_fee_bool : bool,
+    dynamic_fee_bool : bool,
+    compute_unit_price : u64,
+    compute_unit_limit : u32,
+    verbose_log : bool,
+}
+
 impl SingleTxnProcess {
     fn new(
         id: u32,
@@ -133,7 +152,7 @@ impl SingleTxnProcess {
         let message: Message;
 
         let pay =
-            (5000 + self.id) as u64 + (rand::thread_rng().gen_range(1, 10000 /* high */));
+            (5000 + self.id) as u64 + (rand::thread_rng().gen_range(1 ..1000/* high */));
 
         let memo = SingleTxnProcess::generate_random_string(5);
         let recent_blockhash = self.recent_blockhashes.read().unwrap();
@@ -320,32 +339,12 @@ impl SingleTxnProcess {
                 let time_start = Instant::now();
                 // info!("[+] Time : {:?}", time);
                 let time_at_txn_sent = time;
-                // let rpc_ws = self.rpc_ws.clone();
-                // let name = self.name.clone();
-                // let (send_processed, recv_processed) = std::sync::mpsc::channel();
-                // let (send_confirmed, recv_confirmed) = std::sync::mpsc::channel();
                 let landed_slot = self.get_txn_status(signature.clone()).await.unwrap_or(6969);
                 let duration1 = time_start.elapsed();
                 if landed_slot == 6969 {
                     status = false;
                 }
-                // let pubsub_processed_handle = task::spawn(async move {
-                //     SingleTxnProcess::transaction_status(rpc_ws.clone(), name.clone(), signature, CommitmentConfig::processed(), send_processed);
-                // });
-                // let rpc_ws = self.rpc_ws.clone();
-                // let name = self.name.clone();
-                // let pubsub_confirmed_handle = task::spawn(async move{
-                //     SingleTxnProcess::transaction_status(rpc_ws.clone(), name.clone(), signature, CommitmentConfig::confirmed(), send_confirmed);
-                // });
-                // let (response_when_txn_processed, time_at_txn_processed) = recv_processed.recv().expect("Error in receiving from sig sub checking processed");
-                // info!("[+] rpc : {} : Txn processed",self.name );
-                // let duration1 = time_start.elapsed();
-                // let (response_when_txn_confirmed, time_at_txn_confirmed) = recv_confirmed.recv().expect("Error in receiving from sig sub checking confirmed");
-                // let duration2 = time_start.elapsed();
-                //
-                // let landed_slot = SingleTxnProcess::get_txn_slot(response_when_txn_processed);
-                // info!("[+] rpc : {} : Txn confirmed",self.name );
-                // info!("Time taken for txn to be processed : {} {} {:#?} {:#?}", time_at_txn_processed , time_at_txn_sent, duration1, duration2);
+
                 let txn_data = TxnData {
                     id: self.id,
                     txn_id: signature.to_string(),
@@ -426,6 +425,46 @@ async fn get_recent_priority_fee_estimate(url: &str) -> f64 {
     fee
 }
 
+struct Orchestrator {
+    global_variable: GlobalVariable,
+    test_rpc_handle_vec: Vec<TestRPCHandle>,
+    blockhash_arc : Arc<RwLock<Option<Hash>>>,
+    slot_arc : Arc<RwLock<Option<u64>>>,
+}
+
+impl Orchestrator {
+    fn init(global_variable: GlobalVariable) -> Orchestrator {
+        let mut test_rpc_handle_vec = vec![];
+        for i in 0..global_variable.rpc_vec.len() {
+            let test_rpc_handle = TestRPCHandle {
+                name : global_variable.rpc_vec[i].clone(),
+                url : global_variable.rpc_vec[i].clone(),
+                out_csv_file_name : global_variable.out_csv_file_name_vec[i].clone(),
+                out_csv_file_writer_handle : Arc::new(Mutex::new(Writer::from_writer(
+                    OpenOptions::new()
+                        .write(true)
+                        .append(true)
+                        .create(true)
+                        .open(global_variable.out_csv_file_name_vec[i].clone())
+                        .unwrap()
+                )))
+            };
+            test_rpc_handle_vec.push(test_rpc_handle);
+        }
+        let blockhash_arc = Arc::new(RwLock::new(None));
+        let slot_arc = Arc::new(RwLock::new(None));
+        Orchestrator {
+            global_variable,
+            test_rpc_handle_vec,
+            blockhash_arc,
+            slot_arc,
+        }
+    }
+
+    fn start_test(&self) {
+
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -443,6 +482,40 @@ async fn main() {
         ),
     ])
     .unwrap();
+
+    //setting up the env
+    dotenv().ok();
+    let rpc_vec : Vec<String> = env::var("RPC_ARRAY").expect("RPC_ARRAY must be set").split(',').map(|x| x.to_string()).collect();
+    let out_csv_file_name_vec : Vec<String> = env::var("OUT_CSV_FILE_ARRAY").expect("OUT_CSV_FILE_ARRAY must be set").split(',').map(|x| x.to_string()).collect();
+    if rpc_vec.len() != out_csv_file_name_vec.len() {
+        panic!("[-] Error in env variable : RPC_ARRAY and CSV_FILE_ARRAY must be of same length");
+    }
+    let no_of_burst_txn = env::var("NO_OF_BURST_TXN").expect("NO_OF_BURST_TXN must be set").parse::<u32>().unwrap();
+    let no_of_times = env::var("NO_OF_TIMES").expect("NO_OF_TIMES must be set").parse::<u32>().unwrap();
+    let ws_for_subscription = env::var("WS_FOR_SUBSCRIPTION").expect("WS_FOR_SUBSCRIPTION must be set");
+    let rpc_for_read = env::var("RPC_FOR_READ").expect("RPC_FOR_READ must be set");
+    let private_key_file = env::var("PRIVATE_KEY_FILE").expect("PRIVATE_KEY_FILE must be set");
+    let priority_fee_bool = env::var("PRIORITY_FEE_BOOL").expect("PRIORITY_FEE_BOOL must be set").parse::<bool>().unwrap();
+    let dynamic_fee_bool = env::var("DYNAMIC_FEE_BOOL").expect("DYNAMIC_FEE_BOOL must be set").parse::<bool>().unwrap();
+    let compute_unit_price = env::var("COMPUTE_UNIT_PRICE").expect("COMPUTE_UNIT_PRICE must be set").parse::<u64>().unwrap();
+    let compute_unit_limit = env::var("COMPUTE_UNIT_LIMIT").expect("COMPUTE_UNIT_LIMIT must be set").parse::<u32>().unwrap();
+    let verbose_log = env::var("VERBOSE_LOG").expect("VERBOSE_LOG must be set").parse::<bool>().unwrap();
+
+    let global_variable = GlobalVariable {
+        rpc_vec,
+        out_csv_file_name_vec,
+        no_of_burst_txn,
+        no_of_times,
+        ws_for_subscription,
+        rpc_for_read,
+        private_key_file,
+        priority_fee_bool,
+        dynamic_fee_bool,
+        compute_unit_price,
+        compute_unit_limit,
+        verbose_log,
+    };
+    
 
     let csv_file_astra = OpenOptions::new()
         .write(true)
@@ -561,8 +634,6 @@ async fn main() {
         }
     });
 
-    let number_of_txn = 10;
-    let number_of_times = 50;
 
     let mut handle_vec = vec![];
 
@@ -630,13 +701,13 @@ async fn main() {
     // sleep for setting the slots
     tokio::time::sleep(Duration::from_secs(5)).await;
     let mut cnt = 0;
-    for j in 0..number_of_times {
+    for j in 0..no_of_times {
         let priorty_fee = get_recent_priority_fee_estimate(
             "https://mainnet.helius-rpc.com/?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11",
         )
         .await;
         info!("[+] priorty_fee : {}", priorty_fee);
-        for i in 0..number_of_txn {
+        for i in 0..no_of_burst_txn {
             for rpc in rpc_vec.clone() {
                 let csv_file_astra_clone = Arc::clone(&csv_writer_astra);
                 let csv_file_main_clone = Arc::clone(&csv_writer_main);
@@ -698,7 +769,7 @@ async fn main() {
                 handle_vec.push(handle);
             }
         }
-        cnt = cnt + number_of_txn;
+        cnt = cnt + no_of_burst_txn;
         log::info!("tx count : {}", cnt);
         tokio::time::sleep(Duration::from_millis(10000)).await;
     }
