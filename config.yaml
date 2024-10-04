@@ -1,0 +1,18 @@
+rpc :
+  "astralane" :
+      url: "http://rpc:8899"
+
+  "triton":
+      url: "https://staked.helius-rpc.com?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11"
+
+no_of_burst_txn: 5
+time_between_txn: 10000
+no_of_times: 2
+ws_for_subscription: "ws://rpc:8900"
+rpc_for_read: "dont need it, should remove after test"
+private_key_file: "/Users/rxw777/.config/solana/id.json"
+priority_fee_bool: true
+dynamic_fee_bool: true
+compute_unit_price: 0
+compute_unit_limit: 450
+verbose_log: false
