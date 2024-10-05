@@ -28,11 +28,13 @@ use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::pin::pin;
+use std::str::FromStr;
 use tokio::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use dotenv::dotenv;
 use solana_client::nonblocking::pubsub_client::PubsubClient;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair;
 use tokio;
 use tokio::task;
@@ -63,6 +65,9 @@ struct SingleTxnProcess {
     priority_fee_bool: bool,
     compute_unit_price: u64,
     compute_unit_limit: u32,
+    jito_tip_bool: bool,
+    jito_tip_amount: u64,
+    jito_tip_addr: String,
     sig_status_sender : Sender<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>,
 }
 #[derive(Clone)]
@@ -71,11 +76,15 @@ struct TestRPCHandle {
     url : String,
     out_csv_file_name : String,
     out_csv_file_writer_handle : Arc<Mutex<Writer<File>>>,
+    jito_tip_bool: bool,
+    jito_tip_amount: u64,
+    jito_tip_addr: String,
 }
 #[derive(Clone)]
 struct GlobalVariable {
-    rpc_name_vec : Vec<String>,
-    rpc_vec : Vec<String>,
+    // rpc_name_vec : Vec<String>,
+    // rpc_vec : Vec<String>,
+    rpc_name_and_detail_hashmap: HashMap<String, RpcDetail>,
     out_csv_file_name_vec : Vec<String>,
     no_of_burst_txn : u32,
     no_of_times : u32,
@@ -90,9 +99,12 @@ struct GlobalVariable {
     verbose_log : bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct RpcDetail {
     url: String,
+    jito_tip_bool: bool,
+    jito_tip_amount: u64,
+    jito_tip_addr: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,6 +134,9 @@ impl SingleTxnProcess {
         priority_fee_bool: bool,
         compute_unit_price: u64,
         compute_unit_limit: u32,
+        jito_tip_bool: bool,
+        jito_tip_amount: u64,
+        jito_tip_addr: String,
         sig_status_sender : Sender<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>
     ) -> SingleTxnProcess {
         let client =
@@ -137,6 +152,9 @@ impl SingleTxnProcess {
             priority_fee_bool,
             compute_unit_price,
             compute_unit_limit,
+            jito_tip_bool,
+            jito_tip_amount,
+            jito_tip_addr,
             sig_status_sender,
         }
     }
@@ -167,21 +185,28 @@ impl SingleTxnProcess {
             ComputeBudgetInstruction::set_compute_unit_limit(self.compute_unit_limit);
         let compute_unit_price =
             ComputeBudgetInstruction::set_compute_unit_price(self.compute_unit_price);
-
-        if self.priority_fee_bool {
-            message = Message::new(
-                &[compute_unit_limit, compute_unit_price, transfer_instruction],
-                Some(&self.keypair.pubkey()),
-            );
-        } else {
-            message = Message::new(&[transfer_instruction], Some(&self.keypair.pubkey()));
+        let jito_tip_instruction = system_instruction::transfer(
+            &self.keypair.pubkey(),
+            &Pubkey::from_str(&self.jito_tip_addr.clone()).unwrap(),
+            self.jito_tip_amount,
+        );
+        let mut instructions = vec![];
+        if self.jito_tip_bool {
+            instructions.push(jito_tip_instruction);
         }
-        // Create transaction
+        if self.priority_fee_bool {
+            instructions.push(compute_unit_limit);
+            instructions.push(compute_unit_price);
+        }
+        instructions.push(transfer_instruction);
+        message = Message::new(&instructions, Some(&self.keypair.pubkey()));
+
         let transaction = Transaction::new(
             &[&self.keypair],
             message,
             recent_blockhash.unwrap_or_default(),
         );
+
         let start_time = Instant::now();
         match self.client.send_transaction_with_config(
             &transaction,
@@ -320,19 +345,22 @@ struct Orchestrator {
 impl Orchestrator {
     async fn init(global_variable: GlobalVariable) -> Orchestrator {
         let mut test_rpc_handle_vec = vec![];
-        for i in 0..global_variable.rpc_vec.len() {
+        for (name, detials) in global_variable.rpc_name_and_detail_hashmap.iter().clone() {
             let test_rpc_handle = TestRPCHandle {
-                name : global_variable.rpc_name_vec[i].clone(),
-                url : global_variable.rpc_vec[i].clone(),
-                out_csv_file_name : global_variable.out_csv_file_name_vec[i].clone(),
+                name : name.clone(),
+                url : detials.url.clone(),
+                out_csv_file_name : format!("{}.csv", name.clone()),
                 out_csv_file_writer_handle : Arc::new(Mutex::new(Writer::from_writer(
                     OpenOptions::new()
                         .write(true)
                         .append(true)
                         .create(true)
-                        .open(global_variable.out_csv_file_name_vec[i].clone())
+                        .open(format!("{}.csv", name.clone()))
                         .unwrap()
-                )))
+                ))),
+                jito_tip_bool : detials.jito_tip_bool,
+                jito_tip_amount : detials.jito_tip_amount,
+                jito_tip_addr : detials.jito_tip_addr.clone(),
             };
             test_rpc_handle_vec.push(test_rpc_handle);
         }
@@ -402,6 +430,9 @@ impl Orchestrator {
                             data.config.priority_fee_bool,
                             priority_fee as u64,
                             data.config.compute_unit_limit,
+                            test_rpc_handle.jito_tip_bool,
+                            test_rpc_handle.jito_tip_amount,
+                            test_rpc_handle.jito_tip_addr.clone(),
                             data.sig_status_sender.clone(),
                         );
                         // single_txn_process.start().await;
@@ -447,12 +478,9 @@ async fn main() {
     // Parse the YAML content
     let config: YAMLConfig = serde_yaml::from_str(&yaml_content).expect("Unable to parse YAML");
     info!("Config: {:#?}", config);
-    let rpc_vec = config.rpc.keys().map(|x| config.rpc[x].url.clone()).collect();
     let out_csv_file_name_vec = config.rpc.keys().map(|x| format!("{}.csv", x)).collect();
-    let rpc_name_vec = config.rpc.keys().map(|x| x.clone()).collect();
     let global_variable = GlobalVariable {
-        rpc_name_vec,
-        rpc_vec,
+        rpc_name_and_detail_hashmap : config.rpc,
         out_csv_file_name_vec,
         no_of_burst_txn : config.no_of_burst_txn,
         no_of_times : config.no_of_times,
