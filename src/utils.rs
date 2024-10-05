@@ -6,25 +6,23 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::sync::mpsc::{Receiver, Sender};
-use std::thread;
-use std::thread::sleep;
+use std::sync::{Arc, MutexGuard};
+use tokio::sync::mpsc::{Receiver};
 use std::time::Duration;
 use csv::{Writer, WriterBuilder};
 use futures::StreamExt;
-use log::{error, info};
+use log::{error, info, warn};
 use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
 use serde_json::json;
 use solana_client::nonblocking::pubsub_client::PubsubClient;
 use solana_rpc_client_api::config::RpcSignatureSubscribeConfig;
-use solana_rpc_client_api::response::{Response, RpcSignatureResult, SlotUpdate};
+use solana_rpc_client_api::response::{SlotUpdate};
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::signature::Signature;
 use tokio::sync::oneshot;
 use tokio::task;
-use tokio::time::{sleep_until, Instant};
+use tokio::time::{ Instant};
 use crate::{TestRPCHandle, TxnData};
 
 pub async fn get_block_hash(blockhash_arc: std::sync::Arc<std::sync::RwLock<Option<solana_sdk::hash::Hash>>>) {
@@ -87,21 +85,22 @@ pub async fn get_slot(slot_arc : std::sync::Arc<std::sync::RwLock<Option<u64>>>)
     });
 }
 
-pub async fn get_sig_status(sig_sub : PubsubClient, receiver: Receiver<(Signature, String, Sender<u64>, u64)>) {
+pub async fn get_sig_status(sig_sub : PubsubClient, mut receiver: Receiver<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>) {
     let sig_sub = Arc::new(sig_sub);
 
     task::spawn(async move{
         loop {
             let (signature, name, sender, id) ;
-            match receiver.recv(){
-               Ok(data) => {
+            // let result = receiver.recv().await;
+            match receiver.recv().await {
+               Some(data) => {
                    signature = data.0;
                    name = data.1.clone();
-                   sender = data.2.clone();
+                   sender = data.2;
                    id = data.3;
                }
-               Err(e) => {
-                   info!("[-] No data in receiver {}", e);
+               None => {
+                   info!("[-] No data in receiver");
                    continue;
                 }
             }
@@ -110,6 +109,7 @@ pub async fn get_sig_status(sig_sub : PubsubClient, receiver: Receiver<(Signatur
             task::spawn(async move {
                 let (tx1, rx1) = oneshot::channel();
                 let (tx2, rx2) = oneshot::channel();
+                let name = name.clone();
                 task::spawn(async move{
                     info!("[-] rpc : {} : Trying to subscribe to signature : {}", name.clone(), id);
                     let subscription = sig_sub.signature_subscribe(&signature, Some(RpcSignatureSubscribeConfig{
@@ -118,12 +118,20 @@ pub async fn get_sig_status(sig_sub : PubsubClient, receiver: Receiver<(Signatur
                     })).await;
                     match subscription{
                         Ok((mut stream, unsub)) => {
-                            while let Some(response) = stream.next().await{
-
-                                info!("[+] rpc : {} : Transaction status {}", name.clone(), id);
-                                tx1.send(response.context.slot).expect("Error in sending tx1");
-                                break;
+                            // let a = stream.next().await;
+                            loop {
+                                match stream.next().await {
+                                    Some(respone) => {
+                                        tx1.send(respone.context.slot).expect("Error in sending tx1");
+                                        break;
+                                    }
+                                    None => {
+                                        warn!("[-] rpc : {} : No response from signature subscription", name.clone());
+                                        continue;
+                                    }
+                                }
                             }
+
                             unsub().await;
                         }
                         Err(e) => {
@@ -133,22 +141,24 @@ pub async fn get_sig_status(sig_sub : PubsubClient, receiver: Receiver<(Signatur
                     }
                 });
                 task::spawn(async {
-                    sleep(Duration::from_secs(60));
+                    tokio::time::sleep(Duration::from_secs(60)).await;
                     tx2.send(6969).expect("Error in sending tx2");
                 });
                 tokio::select! {
                     val = rx1 => {
-                        info!("[+] rpc : {} : Transaction status received", name.clone());
-                        sender.send(val.unwrap()).expect("Error in sending response");
+                        if sender.is_closed() {
+                            warn!("[-]  : Sender is closed");
+                        }
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        // info!("[+] rpc : {} : Transaction status received", name.clone());
+                        sender.send(val.unwrap()).await.expect("Error in sending response");
                     }
                     val = rx2 => {
-                        error!("[-] rpc : {} : txn status time out", name.clone());
-                        sender.send(6969).expect("Error in sending response");
+                        // error!("[-] rpc : {} : txn status time out", name.clone());
+                        sender.send(6969).await.expect("Error in sending response");
                     }
                 }
             });
-
-
         }
     });
 }

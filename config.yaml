@@ -5,7 +5,7 @@ rpc :
   "triton":
       url: "https://staked.helius-rpc.com?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11"
 
-no_of_burst_txn: 5
+no_of_burst_txn: 2
 time_between_txn: 10000
 no_of_times: 2
 ws_for_subscription: "ws://rpc:8900"

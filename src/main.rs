@@ -5,7 +5,7 @@ use std::{env, fs};
 use chrono::Utc;
 use csv::Writer;
 use futures::StreamExt;
-use log::{error, info};
+use log::{error, info, warn};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::pin::pin;
-use std::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use dotenv::dotenv;
@@ -63,7 +63,7 @@ struct SingleTxnProcess {
     priority_fee_bool: bool,
     compute_unit_price: u64,
     compute_unit_limit: u32,
-    sig_status_sender : Sender<(Signature, String, Sender<u64>, u64)>,
+    sig_status_sender : Sender<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>,
 }
 #[derive(Clone)]
 struct TestRPCHandle {
@@ -122,7 +122,7 @@ impl SingleTxnProcess {
         priority_fee_bool: bool,
         compute_unit_price: u64,
         compute_unit_limit: u32,
-        sig_status_sender : Sender<(Signature, String, Sender<u64>, u64)>
+        sig_status_sender : Sender<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>
     ) -> SingleTxnProcess {
         let client =
             RpcClient::new_with_commitment(rpc_http.clone(), CommitmentConfig::processed());
@@ -224,21 +224,50 @@ impl SingleTxnProcess {
                 // let time_start = Instant::now();
                 // info!("[+] Time : {:?}", time);
 
-                let (sig_result_sender, sig_result_receiver) = std::sync::mpsc::channel();
-                match self.sig_status_sender.send((signature.clone(), self.name.clone(), sig_result_sender, self.id as u64)) {
+                let (sig_result_sender, mut sig_result_receiver) = tokio::sync::mpsc::channel(128);
+                let name = self.name.clone();
+                let handle = task::spawn(async move{
+                    let mut landed_slot ;
+
+                    if sig_result_receiver.is_closed() {
+                        warn!("[-] rpc : {} : Receiver is closed", name);
+                        landed_slot = 0;
+                    }
+                    match sig_result_receiver.recv().await{
+                        Some(data) => {
+                            info!("[-] rpc : {} : Data received : {:#?}", name, data);
+                            landed_slot = data;
+                        }
+                        None => {
+                            if sig_result_receiver.is_closed() {
+                                warn!("[-] rpc : {} : after sig recv Receiver is closed", name);
+                                landed_slot = 0;
+                            }
+                            error!("[-] rpc : {} : No data in receiver ", name);
+                            landed_slot = 0;
+                        }
+                    }
+                    landed_slot
+                });
+
+                // if sig_result_receiver.is_closed() {
+                //     warn!("[-] rpc : {} : before txn Receiver is closed", self.name);
+                // }
+                match self.sig_status_sender.send((signature.clone(), self.name.clone(), sig_result_sender, self.id as u64)).await {
                     Ok(_) => {
-                        // info!("[+] rpc : {} : Signature sent : {:?}", self.name, signature);
+                        info!("[+] rpc : {} : Signature sent via channel: {:?}", self.name, signature);
                     }
                     Err(e) => {
                         error!("[-] rpc : {} : Error in sending signature : {:?}", self.name, e);
                     }
                 }
 
-                let duration1 = time.elapsed();
-                let landed_slot = sig_result_receiver.recv().unwrap();
+                let mut landed_slot = handle.await.unwrap();
+
                 if landed_slot == 6969 {
                     status = false;
                 }
+                let duration1 = time.elapsed();
 
                 let txn_data = TxnData {
                     id: self.id,
@@ -285,7 +314,7 @@ struct Orchestrator {
     block_hash_arc: Arc<RwLock<Option<Hash>>>,
     slot_arc : Arc<RwLock<Option<u64>>>,
     // sig_sub : Arc<solana_client::nonblocking::pubsub_client::PubsubClient>,
-    sig_status_sender: Sender<(Signature, String, Sender<u64>, u64)>,
+    sig_status_sender: Sender<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>,
 }
 
 impl Orchestrator {
@@ -320,7 +349,7 @@ impl Orchestrator {
             }
         };
 
-        let (sig_status_sender, sig_status_receiver) = std::sync::mpsc::channel();
+        let (sig_status_sender, sig_status_receiver) = tokio::sync::mpsc::channel(128);
         utils::get_sig_status(sig_sub, sig_status_receiver).await;
         // let sig_sub_arc = Arc::new(sig_sub);
         let block_hash_arc = Arc::new(RwLock::new(None));
