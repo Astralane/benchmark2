@@ -22,7 +22,7 @@ use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::signature::Signature;
 use tokio::sync::oneshot;
 use tokio::task;
-use tokio::time::{ Instant};
+use tokio::time::{Instant};
 use crate::{TestRPCHandle, TxnData};
 
 pub async fn get_block_hash(blockhash_arc: std::sync::Arc<std::sync::RwLock<Option<solana_sdk::hash::Hash>>>) {
@@ -50,7 +50,7 @@ pub async fn get_block_hash(blockhash_arc: std::sync::Arc<std::sync::RwLock<Opti
     });
 }
 
-pub async fn get_slot(slot_arc : std::sync::Arc<std::sync::RwLock<Option<u64>>>) {
+pub async fn get_slot(slot_arc: std::sync::Arc<std::sync::RwLock<Option<u64>>>) {
     task::spawn(async move {
         let ws_rpc = solana_client::nonblocking::pubsub_client::PubsubClient::new(
             "wss://mainnet.helius-rpc.com/?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11",
@@ -85,23 +85,23 @@ pub async fn get_slot(slot_arc : std::sync::Arc<std::sync::RwLock<Option<u64>>>)
     });
 }
 
-pub async fn get_sig_status(sig_sub : PubsubClient, mut receiver: Receiver<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>) {
+pub async fn get_sig_status(sig_sub: PubsubClient, mut receiver: Receiver<(Signature, String, tokio::sync::mpsc::Sender<u64>, u64)>) {
     let sig_sub = Arc::new(sig_sub);
 
-    task::spawn(async move{
+    task::spawn(async move {
         loop {
-            let (signature, name, sender, id) ;
+            let (signature, name, sender, id);
             // let result = receiver.recv().await;
             match receiver.recv().await {
-               Some(data) => {
-                   signature = data.0;
-                   name = data.1.clone();
-                   sender = data.2;
-                   id = data.3;
-               }
-               None => {
-                   info!("[-] No data in receiver");
-                   continue;
+                Some(data) => {
+                    signature = data.0;
+                    name = data.1.clone();
+                    sender = data.2;
+                    id = data.3;
+                }
+                None => {
+                    info!("[-] No data in receiver");
+                    continue;
                 }
             }
             // let name = name.clone();
@@ -110,13 +110,13 @@ pub async fn get_sig_status(sig_sub : PubsubClient, mut receiver: Receiver<(Sign
                 let (tx1, rx1) = oneshot::channel();
                 let (tx2, rx2) = oneshot::channel();
                 let name = name.clone();
-                task::spawn(async move{
+                task::spawn(async move {
                     info!("[-] rpc : {} : Trying to subscribe to signature : {}", name.clone(), id);
-                    let subscription = sig_sub.signature_subscribe(&signature, Some(RpcSignatureSubscribeConfig{
+                    let subscription = sig_sub.signature_subscribe(&signature, Some(RpcSignatureSubscribeConfig {
                         commitment: Some(CommitmentConfig::processed()),
                         enable_received_notification: Some(false),
                     })).await;
-                    match subscription{
+                    match subscription {
                         Ok((mut stream, unsub)) => {
                             // let a = stream.next().await;
                             loop {
@@ -195,7 +195,7 @@ pub async fn get_recent_priority_fee_estimate() -> f64 {
     fee
 }
 
-pub async fn ping_url(rpc_handle : Vec<TestRPCHandle>) {
+pub async fn ping_url(rpc_handle: Vec<TestRPCHandle>) {
     task::spawn(async move {
         let mut file = OpenOptions::new()
             .write(true)
@@ -223,7 +223,7 @@ pub async fn ping_url(rpc_handle : Vec<TestRPCHandle>) {
     });
 }
 
-pub fn csv_writer (mut csv_file_handle: MutexGuard<Writer<File>>, data: TxnData) {
+pub fn csv_writer(mut csv_file_handle: MutexGuard<Writer<File>>, data: TxnData) {
     // let mut writer = csv_file_handle.lock().unwrap();
     csv_file_handle.serialize(&data).expect("Failed to write to CSV");
     csv_file_handle.flush().expect("Failed to flush CSV writer");
