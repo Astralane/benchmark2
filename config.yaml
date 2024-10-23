@@ -14,7 +14,7 @@ rpc :
   "jito-50" :
       url: "https://mainnet.block-engine.jito.wtf/api/v1/transactions"
       txn_or_bundle: "txn"
-      jito_tip_bool: true
+      jito_tip_bool: false
       jito_tip_amount: 50000
       jito_tip_addr: "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY"
 
@@ -27,12 +27,12 @@ rpc :
 
 no_of_burst_txn: 1
 time_between_txn: 2000
-no_of_times: 10
+no_of_times: 100
 ws_for_subscription: "wss://mainnet.helius-rpc.com/?api-key=f7a83dd5-197e-46f9-87e0-e59497b17b22"
 rpc_for_read: "dont need it, should remove after test"
 private_key_file: "/Users/rxw777/.config/solana/id.json"
 priority_fee_bool: true
 dynamic_fee_bool: true
 compute_unit_price: 0
-compute_unit_limit: 1000
+compute_unit_limit: 700
 verbose_log: false

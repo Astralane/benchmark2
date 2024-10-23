@@ -28,7 +28,7 @@ use crate::{TestRPCHandle, TxnData};
 pub async fn get_block_hash(blockhash_arc: std::sync::Arc<std::sync::RwLock<Option<solana_sdk::hash::Hash>>>) {
     task::spawn(async move {
         let rpc = solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment(
-            "https://staked.helius-rpc.com?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11"
+            "https://staked.helius-rpc.com?api-key=f7a83dd5-197e-46f9-87e0-e59497b17b22"
                 .to_string(),
             CommitmentConfig::confirmed(),
         );
@@ -53,7 +53,7 @@ pub async fn get_block_hash(blockhash_arc: std::sync::Arc<std::sync::RwLock<Opti
 pub async fn get_slot(slot_arc: std::sync::Arc<std::sync::RwLock<Option<u64>>>) {
     task::spawn(async move {
         let ws_rpc = solana_client::nonblocking::pubsub_client::PubsubClient::new(
-            "wss://mainnet.helius-rpc.com/?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11",
+            "wss://mainnet.helius-rpc.com/?api-key=f7a83dd5-197e-46f9-87e0-e59497b17b22",
         )
             .await;
         match ws_rpc {
@@ -165,7 +165,7 @@ pub async fn get_sig_status(sig_sub: PubsubClient, mut receiver: Receiver<(Signa
 
 pub async fn get_recent_priority_fee_estimate() -> f64 {
     let resp = reqwest::Client::new()
-        .post("https://mainnet.helius-rpc.com/?api-key=467d4eb5-ef90-4148-91ce-bd0c247c0b11")
+        .post("https://mainnet.helius-rpc.com/?api-key=f7a83dd5-197e-46f9-87e0-e59497b17b22")
         .body(
             json!({
                 "jsonrpc": "2.0",
